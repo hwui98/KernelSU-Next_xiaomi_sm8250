@@ -97,6 +97,19 @@ build() {
             ${DEVICE}_defconfig \
             vendor/xiaomi/magictime-common.config
 
+	cat DroidSpaces.config >> $OUT/.config
+
+    make O="$OUT" olddefconfig
+
+    echo "===== DroidSpaces Config Check ====="
+    grep IPC_NS $OUT/.config || true
+    grep USER_NS $OUT/.config || true
+    grep PID_NS $OUT/.config || true
+    grep NET_NS $OUT/.config || true
+    grep OVERLAY_FS $OUT/.config || true
+    grep SECCOMP $OUT/.config || true
+    echo "===================================="
+
     # Компиляция ядра
     make -j $(nproc) \
                 O="$OUT" \
