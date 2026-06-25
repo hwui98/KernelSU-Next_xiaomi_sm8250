@@ -1,4 +1,4 @@
-name: Build Kernel
+name: Build UMI Kernel
 
 on:
   workflow_dispatch:
@@ -17,23 +17,86 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y \
-            git \
-            curl \
-            wget \
             bc \
             bison \
-            flex \
             build-essential \
-            zip \
-            unzip \
-            cpio \
-            rsync \
-            libssl-dev \
+            ccache \
+            curl \
+            flex \
+            git \
             libelf-dev \
-            python3
+            libssl-dev \
+            lld \
+            llvm \
+            python3 \
+            rsync \
+            unzip \
+            wget \
+            zip
 
-      - name: Show tree
+      - name: Download Clang
         run: |
-          pwd
-          ls -la
-          find . -maxdepth 2 -type f | head -100
+          wget -O clang.tar.gz \
+          https://github.com/ZyCromerZ/Clang/releases/download/20.0.0git-20250129-release/Clang-20.0.0git-20250129.tar.gz
+
+          mkdir clang
+          tar -xzf clang.tar.gz -C clang
+
+      - name: Build Defconfig
+        run: |
+          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+
+          make O=out ARCH=arm64 umi_defconfig
+
+          cat DroidSpaces.config >> out/.config
+
+          make O=out ARCH=arm64 olddefconfig
+
+      - name: Check DroidSpaces Config
+        run: |
+          echo "===== DroidSpaces Config Check ====="
+
+          grep CONFIG_PID_NS out/.config || true
+          grep CONFIG_IPC_NS out/.config || true
+          grep CONFIG_UTS_NS out/.config || true
+          grep CONFIG_USER_NS out/.config || true
+          grep CONFIG_NET_NS out/.config || true
+
+          grep CONFIG_CGROUPS out/.config || true
+          grep CONFIG_VETH out/.config || true
+          grep CONFIG_TUN out/.config || true
+
+          grep CONFIG_OVERLAY_FS out/.config || true
+          grep CONFIG_SECCOMP out/.config || true
+
+          echo "===================================="
+
+      - name: Build Kernel
+        run: |
+          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+
+          make -j$(nproc) \
+            O=out \
+            ARCH=arm64 \
+            CC=clang \
+            LD=ld.lld \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            2>&1 | tee build.log
+
+      - name: Upload Build Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+
+      - name: Upload Kernel
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: umi-kernel
+          path: |
+            out/arch/arm64/boot/Image
+            out/arch/arm64/boot/dtbo.img
+            out/arch/arm64/boot/**/*.dtb
