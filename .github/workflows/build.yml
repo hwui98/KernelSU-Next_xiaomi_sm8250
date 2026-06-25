@@ -1,4 +1,4 @@
-name: Build UMI Kernel
+name: Build UMI Kernel with KSU-Next + DroidSpaces
 
 on:
   workflow_dispatch:
@@ -8,95 +8,89 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          max-size: 3G
+          key: kernel-umi-ksu-${{ github.sha }}
+
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y \
-            bc \
-            bison \
-            build-essential \
-            ccache \
-            curl \
-            flex \
-            git \
-            libelf-dev \
-            libssl-dev \
-            lld \
-            llvm \
-            python3 \
-            rsync \
-            unzip \
-            wget \
-            zip
+          sudo apt install -y bc bison build-essential ccache curl flex git libelf-dev \
+            libssl-dev lld llvm python3 rsync unzip wget zip
 
       - name: Download Clang
         run: |
-          wget -O clang.tar.gz \
-          https://github.com/ZyCromerZ/Clang/releases/download/20.0.0git-20250129-release/Clang-20.0.0git-20250129.tar.gz
+          wget -q https://github.com/ZyCromerZ/Clang/releases/download/20.0.0git-20250129-release/Clang-20.0.0git-20250129.tar.gz -O clang.tar.gz
+          mkdir -p clang && tar -xzf clang.tar.gz -C clang --strip-components=1
+          echo "$GITHUB_WORKSPACE/clang/bin" >> $GITHUB_PATH
 
-          mkdir clang
-          tar -xzf clang.tar.gz -C clang
-
-      - name: Build Defconfig
+      - name: Prepare Defconfig + DroidSpaces
         run: |
+          set -euo pipefail
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-
+          
+          echo "=== Generating umi defconfig ==="
           make O=out ARCH=arm64 umi_defconfig
-
+          
+          echo "=== Appending DroidSpaces.config ==="
           cat DroidSpaces.config >> out/.config
-
+          
+          echo "=== Running olddefconfig ==="
           make O=out ARCH=arm64 olddefconfig
 
-      - name: Check DroidSpaces Config
+      - name: Config Check (KSU + DroidSpaces)
         run: |
-          echo "===== DroidSpaces Config Check ====="
-
-          grep CONFIG_PID_NS out/.config || true
-          grep CONFIG_IPC_NS out/.config || true
-          grep CONFIG_UTS_NS out/.config || true
-          grep CONFIG_USER_NS out/.config || true
-          grep CONFIG_NET_NS out/.config || true
-
-          grep CONFIG_CGROUPS out/.config || true
-          grep CONFIG_VETH out/.config || true
-          grep CONFIG_TUN out/.config || true
-
-          grep CONFIG_OVERLAY_FS out/.config || true
-          grep CONFIG_SECCOMP out/.config || true
-
-          echo "===================================="
+          echo "===== Kernel Config Check ====="
+          echo "KernelSU status:"
+          grep -E "CONFIG_KERNELSU|KSU" out/.config || echo "KernelSU not found in .config (may be patched)"
+          echo ""
+          echo "DroidSpaces related:"
+          grep -E "CONFIG_(PID|IPC|UTS|USER|NET)_NS|CONFIG_OVERLAY_FS|CONFIG_SECCOMP" out/.config || true
+          echo "=============================="
 
       - name: Build Kernel
         run: |
+          set -euo pipefail
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-
-          make -j$(nproc) \
-            O=out \
-            ARCH=arm64 \
-            CC=clang \
-            LD=ld.lld \
-            LLVM=1 \
-            LLVM_IAS=1 \
+          
+          echo "=== Starting Kernel Build ==="
+          echo "Start time: $(date)"
+          
+          make -j$(nproc) O=out ARCH=arm64 \
+            CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
             2>&1 | tee build.log
+          
+          echo "=== Build finished at: $(date) ==="
 
-      - name: Upload Build Log
+      - name: Show Last 200 Lines if Failed
+        if: failure()
+        run: |
+          echo "❌ BUILD FAILED! Showing last 200 lines of log:"
+          echo "============================================"
+          tail -n 200 build.log
+          echo "============================================"
+          echo "🔍 Please check the full build.log in Artifacts for more details."
+
+      - name: Upload Build Log (always)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-log
+          name: build-log-umi
           path: build.log
 
-      - name: Upload Kernel
+      - name: Upload Kernel Artifacts (on success)
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: umi-kernel
+          name: MagicTime-KSU-Next_umi
           path: |
             out/arch/arm64/boot/Image
+            out/arch/arm64/boot/Image.gz-dtb
             out/arch/arm64/boot/dtbo.img
-            out/arch/arm64/boot/**/*.dtb
